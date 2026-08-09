@@ -55,6 +55,34 @@ const fakeAvatars = new Map<string, string>();
 const patches: Array<() => void> = [];
 let unregister: (() => void) | undefined;
 
+/**
+ * Coerce a command option value to a boolean.
+ *
+ * Not decoration: BOOLEAN options don't always arrive as real booleans, and
+ * `Boolean("false")` is `true`, which silently inverts the option. Anything
+ * unrecognised falls back rather than guessing.
+ */
+function asBool(value: unknown, fallback: boolean): boolean {
+    if (value === undefined || value === null || value === "") return fallback;
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value !== 0;
+
+    switch (String(value).trim().toLowerCase()) {
+        case "true":
+        case "1":
+        case "yes":
+        case "on":
+            return true;
+        case "false":
+        case "0":
+        case "no":
+        case "off":
+            return false;
+        default:
+            return fallback;
+    }
+}
+
 function fakeIdFor(name: string): string {
     let h = 0;
     for (let i = 0; i < name.length; i++) {
@@ -173,7 +201,7 @@ export default {
                         storage.defaultName ||
                         "Clyde"
                 );
-                const isBot = arg("bot") ?? true;
+                const isBot = asBool(arg("bot"), true);
 
                 const channelId = ctx?.channel?.id ?? SelectedChannelStore.getChannelId();
                 if (!channelId) return;
@@ -185,7 +213,26 @@ export default {
                 message.author.username = name;
                 message.author.global_name = name; // newer clients render this first
                 message.author.discriminator = cached?.discriminator ?? "0000";
-                message.author.bot = Boolean(isBot);
+                message.author.bot = isBot;
+
+                // author.bot isn't the only thing that renders the APP tag —
+                // a webhook id, an application id or interaction metadata each
+                // force it on their own, and createBotMessage may leave some of
+                // them set. Clear them when the tag isn't wanted.
+                if (!isBot) {
+                    for (const key of [
+                        "webhook_id",
+                        "webhookId",
+                        "application_id",
+                        "applicationId",
+                        "interaction",
+                        "interaction_metadata",
+                        "interactionMetadata",
+                    ]) {
+                        delete (message as Record<string, unknown>)[key];
+                    }
+                    message.author.system = false;
+                }
 
                 // Precedence: explicit pfp: > id: lookup > stored default.
                 const explicitPfp = String(arg("pfp") ?? "").trim();
@@ -222,7 +269,7 @@ export default {
                 // createBotMessage sets EPHEMERAL for us, but set it both ways
                 // rather than only stripping — that stays correct if the helper
                 // ever stops setting it.
-                const ephemeral = Boolean(arg("ephemeral") ?? storage.defaultEphemeral);
+                const ephemeral = asBool(arg("ephemeral"), Boolean(storage.defaultEphemeral));
                 if (ephemeral) message.flags |= EPHEMERAL;
                 else message.flags &= ~EPHEMERAL;
 
