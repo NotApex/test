@@ -1,12 +1,11 @@
 import { React, ReactNative, NavigationNative, clipboard } from "@vendetta/metro/common";
 import { storage } from "@vendetta/plugin";
 import { useProxy } from "@vendetta/storage";
-import { getAssetIDByName } from "@vendetta/ui/assets";
 import { showInputAlert } from "@vendetta/ui/alerts";
-import { Forms } from "@vendetta/ui/components";
-import { showSimpleActionSheet } from "@vendetta/ui/sheets";
+import { Forms, General } from "@vendetta/ui/components";
 import { showToast } from "@vendetta/ui/toasts";
 
+import { asText, icon, leadingIcon, showMenu } from "../lib/discord";
 import {
     coerce,
     deleteKey,
@@ -23,21 +22,23 @@ import {
 import { refresh } from "../lib/refresh";
 import JsonEditor from "./JsonEditor";
 
-const { FormSection, FormRow, FormInput, FormSwitchRow, FormDivider, FormText } = Forms;
+const { FormSection, FormRow, FormInput, FormSwitchRow, FormDivider } = Forms;
+// Forms.FormText is not present on every client build. General is
+// findByProps("Button", "Text", "View"), which Vendetta itself relies on.
+const { Text } = General;
 
 /** Rows rendered before the "Show more" cut-off. A guild's member list is not a scroll view. */
 const PAGE = 60;
 
-function toast(message: string, icon = "ic_edit_24px") {
-    showToast(message, getAssetIDByName(icon));
-}
+const note = (message: string, ok = true) =>
+    showToast(message, icon(ok ? "ic_message_retry" : "ic_warning_24px"));
 
 /**
  * A text field for one primitive property.
  *
- * Holds its own draft state rather than reading straight off the object. A
- * controlled input fed from a value that a parent re-render can replace loses
- * the cursor mid-word — and the parent here re-renders on every commit.
+ * Holds its own draft state rather than reading straight off the object: a
+ * controlled input fed from a value a parent re-render can replace loses the
+ * cursor mid-word, and the parent re-renders on every commit.
  */
 function LeafInput({
     obj,
@@ -56,8 +57,8 @@ function LeafInput({
     }, [obj, name]);
 
     const [text, setText] = React.useState(initial);
-    // One complaint per field. Otherwise a read-only property fires a toast on
-    // every keystroke and buries the screen.
+    // One complaint per field, or a read-only property fires a toast on every
+    // keystroke and buries the screen.
     const warned = React.useRef(false);
 
     return (
@@ -65,7 +66,8 @@ function LeafInput({
             title={`${name}  ·  ${kind}`}
             value={text}
             multiline={text.length > 64}
-            onChange={(next: string) => {
+            onChange={(raw: unknown) => {
+                const next = asText(raw);
                 setText(next);
 
                 const parsed = coerce(next, kind);
@@ -75,7 +77,7 @@ function LeafInput({
                 if (error) {
                     if (!warned.current) {
                         warned.current = true;
-                        toast(`${name}: ${error}`, "ic_warning_24px");
+                        note(`${name}: ${error}`, false);
                     }
                     return;
                 }
@@ -94,8 +96,8 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
     const [limit, setLimit] = React.useState(PAGE);
 
     // Recomputed on every commit on purpose: adding or deleting a key has to
-    // show up immediately, and these objects are mutated in place so there is
-    // no new reference to key a memo off.
+    // show immediately, and these objects are mutated in place, so there is no
+    // new reference to key a memo off.
     const keys = React.useMemo(
         () => keysOf(target, !!storage.showGetters),
         [target, tick, storage.showGetters]
@@ -120,51 +122,48 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
         navigation.push("VendettaCustomPage", { title, render });
 
     const rowMenu = (key: string, value: unknown) =>
-        showSimpleActionSheet({
-            key: "TinkerRowMenu",
-            header: { title: key, onClose: () => {} },
-            options: [
-                {
-                    label: "Copy value",
-                    onPress: () => {
-                        clipboard.setString(
-                            isLeaf(kindOf(value))
-                                ? String(value)
-                                : safeStringify(value, Number(storage.jsonDepth) || 4)
-                        );
-                        toast("Copied value");
-                    },
+        showMenu(key, [
+            {
+                label: "Copy value",
+                onPress: () => {
+                    clipboard.setString(
+                        isLeaf(kindOf(value))
+                            ? String(value)
+                            : safeStringify(value, Number(storage.jsonDepth) || 4)
+                    );
+                    note("Copied value");
                 },
-                {
-                    label: "Copy path",
-                    onPress: () => {
-                        clipboard.setString(`${path}.${key}`);
-                        toast("Copied path");
-                    },
+            },
+            {
+                label: "Copy path",
+                onPress: () => {
+                    clipboard.setString(`${path}.${key}`);
+                    note("Copied path");
                 },
-                {
-                    label: "Set to null",
-                    onPress: () => {
-                        const error = writeKey(target, key, null);
-                        error ? toast(error, "ic_warning_24px") : commit();
-                    },
+            },
+            {
+                label: "Set to null",
+                onPress: () => {
+                    const error = writeKey(target, key, null);
+                    error ? note(error, false) : commit();
                 },
-                {
-                    label: "Set to empty string",
-                    onPress: () => {
-                        const error = writeKey(target, key, "");
-                        error ? toast(error, "ic_warning_24px") : commit();
-                    },
+            },
+            {
+                label: "Set to empty text",
+                onPress: () => {
+                    const error = writeKey(target, key, "");
+                    error ? note(error, false) : commit();
                 },
-                {
-                    label: "Delete key",
-                    onPress: () => {
-                        const error = deleteKey(target, key);
-                        error ? toast(error, "ic_warning_24px") : commit();
-                    },
+            },
+            {
+                label: "Delete key",
+                isDestructive: true,
+                onPress: () => {
+                    const error = deleteKey(target, key);
+                    error ? note(error, false) : commit();
                 },
-            ],
-        });
+            },
+        ]);
 
     const addField = () =>
         showInputAlert({
@@ -175,22 +174,23 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
             onConfirm: (key: string) => {
                 if (!key.trim()) return;
                 const error = writeKey(target, key.trim(), "");
-                error ? toast(error, "ic_warning_24px") : commit();
+                if (error) throw new Error(error); // shown inline by the alert
+                commit();
             },
         });
 
     return (
         <ReactNative.ScrollView style={{ flex: 1 }}>
             <FormSection title={typeLabel(target)}>
-                <FormText style={{ paddingHorizontal: 16, paddingBottom: 8, opacity: 0.6 }}>
+                <Text style={{ paddingHorizontal: 16, paddingBottom: 8, opacity: 0.6 }}>
                     {path} · {keys.length} keys
-                </FormText>
+                </Text>
                 <FormInput
                     title="Filter keys"
                     value={query}
                     placeholder="author, content, flags…"
-                    onChange={(value: string) => {
-                        setQuery(value);
+                    onChange={(raw: unknown) => {
+                        setQuery(asText(raw));
                         setLimit(PAGE);
                     }}
                 />
@@ -200,33 +200,29 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
                 <FormRow
                     label="Apply changes"
                     subLabel="Tell the store to repaint with the current values"
-                    leading={<FormRow.Icon source={getAssetIDByName("ic_message_retry")} />}
+                    leading={leadingIcon("ic_message_retry")}
                     onPress={() => {
                         const result = refresh(target);
-                        toast(result.detail, result.ok ? "ic_edit_24px" : "ic_warning_24px");
+                        note(result.detail, result.ok);
                     }}
                 />
                 <FormDivider />
                 <FormRow
                     label="Edit as JSON"
                     subLabel="Bulk-edit this object in one text field"
-                    leading={<FormRow.Icon source={getAssetIDByName("ic_feed_24px")} />}
-                    trailing={<FormRow.Arrow />}
+                    leading={leadingIcon("ic_progress_wrench_24px")}
+                    trailing={FormRow.Arrow}
                     onPress={() => push("Edit as JSON", () => <JsonEditor target={target} path={path} />)}
                 />
                 <FormDivider />
-                <FormRow
-                    label="Add field"
-                    leading={<FormRow.Icon source={getAssetIDByName("ic_add_24px")} />}
-                    onPress={addField}
-                />
+                <FormRow label="Add field" leading={leadingIcon("ic_add_24px")} onPress={addField} />
                 <FormDivider />
                 <FormRow
                     label="Copy as JSON"
-                    leading={<FormRow.Icon source={getAssetIDByName("ic_copy_message_link")} />}
+                    leading={leadingIcon("copy", "toast_copy_link")}
                     onPress={() => {
                         clipboard.setString(safeStringify(target, Number(storage.jsonDepth) || 4));
-                        toast("Copied to clipboard");
+                        note("Copied to clipboard");
                     }}
                 />
             </FormSection>
@@ -256,7 +252,7 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
                                 value={value as boolean}
                                 onValueChange={(next: boolean) => {
                                     const error = writeKey(target, key, next);
-                                    error ? toast(`${key}: ${error}`, "ic_warning_24px") : commit();
+                                    error ? note(`${key}: ${error}`, false) : commit();
                                 }}
                             />
                         );
@@ -267,18 +263,16 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
                             <FormRow
                                 label={key}
                                 subLabel={preview(value)}
-                                trailing={<FormRow.Arrow />}
+                                trailing={FormRow.Arrow}
                                 onPress={() =>
-                                    push(key, () => (
-                                        <ObjectEditor target={value} path={`${path}.${key}`} />
-                                    ))
+                                    push(key, () => <ObjectEditor target={value} path={`${path}.${key}`} />)
                                 }
                                 onLongPress={() => rowMenu(key, value)}
                             />
                         );
                     } else {
-                        // null / undefined / function / symbol — nothing sensible to
-                        // type into, so the row is a handle for the long-press menu.
+                        // null / undefined / function / symbol — nothing to type
+                        // into, so the row is a handle for the actions menu.
                         row = (
                             <FormRow
                                 label={key}
