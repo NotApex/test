@@ -1,0 +1,14 @@
+{
+    "name": "tinker",
+    "description": "Adds 'Inspect & edit' to every long-press menu — walk any message, user, channel or guild object and change any field. Local only; nothing is sent to Discord.",
+    "authors": [
+        {
+            "name": "NotApex",
+            "id": "473594289872437279"
+        }
+    ],
+    "main": "src/index.ts",
+    "vendetta": {
+        "icon": "ic_edit_24px"
+    }
+}
