@@ -67,7 +67,10 @@ export default {
     onLoad: () => {
         storage.defaultName ??= "Clyde";
         storage.defaultPfp ??= "clyde";
-        storage.showEphemeralHint ??= true;
+        // Renamed from showEphemeralHint deliberately: the old key is already
+        // persisted as true on existing installs, so `??=` would never reach a
+        // new default. A fresh key starts clean at false.
+        storage.defaultEphemeral ??= false;
 
         // author.avatar is interpreted as a CDN hash, not a URL — the client
         // builds cdn.discordapp.com/avatars/{id}/{avatar}.png from it, so a raw
@@ -135,6 +138,14 @@ export default {
                     displayName: "bot",
                     description: "Show the BOT tag (default: on)",
                     displayDescription: "Show the BOT tag (default: on)",
+                    type: 5,    // BOOLEAN
+                    required: false,
+                },
+                {
+                    name: "ephemeral",
+                    displayName: "ephemeral",
+                    description: "Show the 'only you can see this' hint (default: off)",
+                    displayDescription: "Show the 'only you can see this' hint (default: off)",
                     type: 5,    // BOOLEAN
                     required: false,
                 },
@@ -208,7 +219,12 @@ export default {
                     }
                 }
 
-                if (!storage.showEphemeralHint) message.flags &= ~EPHEMERAL;
+                // createBotMessage sets EPHEMERAL for us, but set it both ways
+                // rather than only stripping — that stays correct if the helper
+                // ever stops setting it.
+                const ephemeral = Boolean(arg("ephemeral") ?? storage.defaultEphemeral);
+                if (ephemeral) message.flags |= EPHEMERAL;
+                else message.flags &= ~EPHEMERAL;
 
                 // Injects straight into the local message store. Nothing is
                 // transmitted; no other client learns this happened.
