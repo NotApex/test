@@ -1,0 +1,14 @@
+{
+    "name": "Local Message",
+    "description": "Adds /message — renders a message with a custom name and pfp in the current channel, visible only to you.",
+    "authors": [
+        {
+            "name": "You!",
+            "id": "YOUR_ID_HERE"
+        }
+    ],
+    "main": "src/index.ts",
+    "vendetta": {
+        "icon": "ic_message"
+    }
+}
