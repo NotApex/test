@@ -1,7 +1,6 @@
 import { React, ReactNative, clipboard } from "@vendetta/metro/common";
 import { storage } from "@vendetta/plugin";
 import { useProxy } from "@vendetta/storage";
-import { showInputAlert } from "@vendetta/ui/alerts";
 import { Forms, General } from "@vendetta/ui/components";
 import { showToast } from "@vendetta/ui/toasts";
 
@@ -93,6 +92,7 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
     const [tick, bump] = React.useReducer((n: number) => n + 1, 0);
     const [query, setQuery] = React.useState("");
     const [limit, setLimit] = React.useState(PAGE);
+    const [newKey, setNewKey] = React.useState("");
 
     // Recomputed on every commit on purpose: adding or deleting a key has to
     // show immediately, and these objects are mutated in place, so there is no
@@ -161,19 +161,24 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
             },
         ]);
 
-    const addField = () =>
-        showInputAlert({
-            title: "Add field",
-            placeholder: "key",
-            confirmText: "Add",
-            cancelText: "Cancel",
-            onConfirm: (key: string) => {
-                if (!key.trim()) return;
-                const error = writeKey(target, key.trim(), "");
-                if (error) throw new Error(error); // shown inline by the alert
-                commit();
-            },
-        });
+    // Inline rather than showInputAlert. That helper renders Vendetta's
+    // InputAlert, which resolves the Alert component by the display name
+    // "FluxContainer(Alert)" — gone from current Discord builds, so under
+    // Bunny/Kettu's compat layer the lazy module proxy throws on access and
+    // takes the screen with it. A row on the page needs no such module.
+    const addField = () => {
+        const key = newKey.trim();
+        if (!key) return;
+
+        const error = writeKey(target, key, "");
+        if (error) {
+            note(`${key}: ${error}`, false);
+            return;
+        }
+
+        setNewKey("");
+        commit();
+    };
 
     return (
         <ReactNative.ScrollView style={{ flex: 1 }}>
@@ -211,7 +216,19 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
                     onPress={() => pushPage("Edit as JSON", () => <JsonEditor target={target} path={path} />)}
                 />
                 <FormDivider />
-                <FormRow label="Add field" leading={leadingIcon("ic_add_24px")} onPress={addField} />
+                <FormInput
+                    title="New field name"
+                    value={newKey}
+                    placeholder="key"
+                    onChange={(raw: unknown) => setNewKey(asText(raw))}
+                />
+                <FormRow
+                    label="Add field"
+                    subLabel={newKey.trim() ? `Adds "${newKey.trim()}" as empty text` : "Type a name above first"}
+                    leading={leadingIcon("ic_add_24px")}
+                    disabled={!newKey.trim()}
+                    onPress={addField}
+                />
                 <FormDivider />
                 <FormRow
                     label="Copy as JSON"
