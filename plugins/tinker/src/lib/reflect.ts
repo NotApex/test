@@ -94,6 +94,41 @@ export function readKey(obj: any, key: string): { ok: boolean; value?: unknown; 
 }
 
 /**
+ * Values each edited object held when the store last painted it.
+ *
+ * These objects *are* the records the stores hold, so an edit is already
+ * applied by the time anything is dispatched. A Flux reducer that merges the
+ * payload into the existing record therefore diffs a value against itself,
+ * concludes nothing changed, and emits nothing — which is why an edit only
+ * showed up after leaving the channel and coming back, when the row list is
+ * rebuilt from scratch regardless.
+ *
+ * Keeping the pre-edit value lets refresh() roll the record back for the
+ * length of one dispatch, so the reducer sees a real change. Only the first
+ * value per key is kept: that is the one the store actually painted, however
+ * many keystrokes have landed since.
+ */
+const pendingChanges = new WeakMap<object, Map<string, unknown>>();
+
+function notePrevious(obj: any, key: string, previous: unknown): void {
+    if (!obj || typeof obj !== "object") return;
+    let changes = pendingChanges.get(obj);
+    if (!changes) pendingChanges.set(obj, (changes = new Map()));
+    if (!changes.has(key)) changes.set(key, previous);
+}
+
+/** Pre-edit values for `obj`, or undefined if it has no unpainted edits. */
+export function pendingFor(obj: any): Map<string, unknown> | undefined {
+    if (!obj || typeof obj !== "object") return undefined;
+    return pendingChanges.get(obj);
+}
+
+/** Forget `obj`'s pre-edit values, once a dispatch has painted them. */
+export function clearPending(obj: any): void {
+    if (obj && typeof obj === "object") pendingChanges.delete(obj);
+}
+
+/**
  * Write a property, returning an error string or null on success.
  *
  * Two failure modes, both quiet: a getter-only property throws under strict
@@ -102,6 +137,8 @@ export function readKey(obj: any, key: string): { ok: boolean; value?: unknown; 
  * trusting that no exception means it landed.
  */
 export function writeKey(obj: any, key: string, value: unknown): string | null {
+    const before = readKey(obj, key);
+
     try {
         obj[key] = value;
     } catch (err: any) {
@@ -109,10 +146,15 @@ export function writeKey(obj: any, key: string, value: unknown): string | null {
     }
 
     const readback = readKey(obj, key);
-    if (!readback.ok) return null; // wrote fine, just can't verify
+    if (!readback.ok) {
+        notePrevious(obj, key, before.ok ? before.value : undefined);
+        return null; // wrote fine, just can't verify
+    }
     if (readback.value !== value && !(Number.isNaN(value) && Number.isNaN(readback.value as number))) {
         return Object.isFrozen(obj) ? "object is frozen" : "property is read-only";
     }
+
+    notePrevious(obj, key, before.ok ? before.value : undefined);
     return null;
 }
 
