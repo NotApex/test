@@ -1,13 +1,18 @@
 import { React, ReactNative } from "@vendetta/metro/common";
 import { storage } from "@vendetta/plugin";
 import { getAssetIDByName } from "@vendetta/ui/assets";
-import { Forms } from "@vendetta/ui/components";
+import { Forms, General } from "@vendetta/ui/components";
 import { showToast } from "@vendetta/ui/toasts";
 
+import { asText } from "../lib/discord";
 import { safeStringify } from "../lib/reflect";
 import { refresh } from "../lib/refresh";
 
-const { FormSection, FormRow, FormInput, FormDivider, FormText } = Forms;
+const { FormSection, FormRow, FormInput, FormDivider } = Forms;
+// Not Forms.FormText: Discord's Forms module doesn't export it on current
+// builds, so it rendered as undefined and took the page down. General is
+// findByProps("Button", "Text", "View"), which Vendetta itself relies on.
+const { Text } = General;
 
 export default function JsonEditor({ target, path }: { target: any; path: string }) {
     const depth = Number(storage.jsonDepth) || 4;
@@ -80,7 +85,7 @@ export default function JsonEditor({ target, path }: { target: any; path: string
 
             {error && (
                 <FormSection title="Error">
-                    <FormText style={{ paddingHorizontal: 16, paddingVertical: 8 }}>{error}</FormText>
+                    <Text style={{ paddingHorizontal: 16, paddingVertical: 8 }}>{error}</Text>
                 </FormSection>
             )}
 
@@ -88,14 +93,14 @@ export default function JsonEditor({ target, path }: { target: any; path: string
                 <FormInput
                     value={text}
                     multiline
-                    onChange={setText}
+                    onChange={(raw: unknown) => setText(asText(raw))}
                     style={{ minHeight: 320, fontFamily: "monospace" }}
                 />
-                <FormText style={{ paddingHorizontal: 16, paddingVertical: 8, opacity: 0.6 }}>
+                <Text style={{ paddingHorizontal: 16, paddingVertical: 8, opacity: 0.6 }}>
                     Values shown as [Object], [Circular] or [Function] were too deep or not
                     serialisable. They are skipped on save, not written back as text. Raise the
                     depth limit in settings to reach them.
-                </FormText>
+                </Text>
             </FormSection>
         </ReactNative.ScrollView>
     );

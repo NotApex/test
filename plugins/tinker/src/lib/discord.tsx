@@ -1,7 +1,8 @@
-import { findByProps } from "@vendetta/metro";
+import { findByName, findByProps } from "@vendetta/metro";
 import { React } from "@vendetta/metro/common";
 import { getAssetIDByName } from "@vendetta/ui/assets";
-import { Forms } from "@vendetta/ui/components";
+import { ErrorBoundary, Forms } from "@vendetta/ui/components";
+import { showToast } from "@vendetta/ui/toasts";
 
 const { FormRow } = Forms;
 
@@ -32,6 +33,62 @@ export function showMenu(title: string, options: SheetOption[]): void {
         },
         options,
     });
+}
+
+/**
+ * Navigation.
+ *
+ * Not `NavigationNative.useNavigation()` + `navigation.push("VendettaCustomPage")`,
+ * which is what this used to do and where the "undefined is not a function"
+ * came from. That route is registered by Vendetta's `patchPanels`, which patches
+ * Discord's *settings* `getScreens` module — so `VendettaCustomPage` only exists
+ * inside the user-settings navigator. A message or channel long-press sheet is
+ * rendered in the main app, where the nearest navigation object is not that
+ * stack: it has no such route, and on many builds no `push` at all, so the call
+ * lands on undefined.
+ *
+ * Discord's own imperative navigation module works from anywhere, which is how
+ * every page-from-a-sheet plugin does it. `Navigator` + `screens` is the shape
+ * it expects to be handed.
+ */
+const Navigation = findByProps("push", "pushLazy", "pop");
+const Navigator = findByName("Navigator") ?? findByProps("Navigator")?.Navigator;
+const modalCloseButton =
+    findByProps("getRenderCloseButton")?.getRenderCloseButton ??
+    findByProps("getHeaderCloseButton")?.getHeaderCloseButton;
+
+/**
+ * Open a page from anywhere — a sheet, another page, a toast handler.
+ *
+ * `render` is used as a component, not called, so it may use hooks. The
+ * ErrorBoundary is the one `VendettaCustomPage` would have provided: without it
+ * a throw inside an editor takes the whole client down rather than the page.
+ */
+export function pushPage(title: string, render: () => JSX.Element): void {
+    if (typeof Navigation?.push !== "function" || !Navigator) {
+        showToast("tinker: this build has no pushable navigator", icon("ic_warning_24px"));
+        return;
+    }
+
+    const Page = () => (
+        <ErrorBoundary>
+            {render()}
+        </ErrorBoundary>
+    );
+
+    Navigation.push(() => (
+        <Navigator
+            initialRouteName="TinkerPage"
+            goBackOnBackPress
+            screens={{
+                TinkerPage: {
+                    title,
+                    headerLeft: modalCloseButton?.(() => Navigation.pop()),
+                    render: Page,
+                },
+            }}
+        />
+    ));
 }
 
 /**

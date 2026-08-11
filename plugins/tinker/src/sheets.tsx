@@ -1,11 +1,11 @@
-import { React, NavigationNative } from "@vendetta/metro/common";
+import { React } from "@vendetta/metro/common";
 import { after, before } from "@vendetta/patcher";
 import { storage } from "@vendetta/plugin";
 import { Forms } from "@vendetta/ui/components";
 import { showToast } from "@vendetta/ui/toasts";
 import { findInReactTree } from "@vendetta/utils";
 
-import { LazyActionSheet, icon, leadingIcon } from "./lib/discord";
+import { LazyActionSheet, icon, leadingIcon, pushPage } from "./lib/discord";
 import { preview, typeLabel } from "./lib/reflect";
 import ObjectEditor from "./pages/ObjectEditor";
 
@@ -72,9 +72,10 @@ function targetsFrom(props: any): Target[] {
     return out;
 }
 
-function TargetPicker({ targets }: { targets: Target[] }) {
-    const navigation = NavigationNative.useNavigation();
+const openTarget = (target: Target) =>
+    pushPage(target.label, () => <ObjectEditor target={target.value} path={target.label} />);
 
+function TargetPicker({ targets }: { targets: Target[] }) {
     return (
         <>
             {targets.map((target, index) => (
@@ -84,12 +85,7 @@ function TargetPicker({ targets }: { targets: Target[] }) {
                         label={target.label}
                         subLabel={`${typeLabel(target.value)} · ${preview(target.value)}`}
                         trailing={FormRow.Arrow}
-                        onPress={() =>
-                            navigation.push("VendettaCustomPage", {
-                                title: target.label,
-                                render: () => <ObjectEditor target={target.value} path={target.label} />,
-                            })
-                        }
+                        onPress={() => openTarget(target)}
                     />
                 </React.Fragment>
             ))}
@@ -99,28 +95,17 @@ function TargetPicker({ targets }: { targets: Target[] }) {
 
 /** The row appended to the sheet. */
 function InspectRow({ targets }: { targets: Target[] }) {
-    // Read inside the row, not passed in: the sheet renders within the
-    // navigator, so this resolves to the stack underneath it and the pushed
-    // page lands where the user expects.
-    const navigation = NavigationNative.useNavigation();
-
     const open = () => {
         try {
             LazyActionSheet?.hideActionSheet?.();
 
             // One candidate isn't a choice — skip the picker.
             if (targets.length === 1) {
-                navigation.push("VendettaCustomPage", {
-                    title: targets[0].label,
-                    render: () => <ObjectEditor target={targets[0].value} path={targets[0].label} />,
-                });
+                openTarget(targets[0]);
                 return;
             }
 
-            navigation.push("VendettaCustomPage", {
-                title: "Inspect & edit",
-                render: () => <TargetPicker targets={targets} />,
-            });
+            pushPage("Inspect & edit", () => <TargetPicker targets={targets} />);
         } catch (err: any) {
             showToast(`Couldn't open editor: ${err?.message ?? err}`, icon("ic_warning_24px"));
         }
@@ -189,11 +174,22 @@ function inject(tree: any): any {
     }
 }
 
+/**
+ * Guards patches registered from the `openLazy` promise.
+ *
+ * That `.then` can resolve after the plugin is unloaded, and a patch installed
+ * then would miss `unpatchAll` entirely — the row would keep appearing on a
+ * disabled plugin, with no handle left to remove it.
+ */
+let live = false;
+
 export function patchActionSheets(): void {
     if (!LazyActionSheet?.openLazy) {
         showToast("tinker: action sheet module not found", icon("ic_warning_24px"));
         return;
     }
+
+    live = true;
 
     unpatchers.push(
         before("openLazy", LazyActionSheet, ([component, key, props]: [any, string, any]) => {
@@ -204,6 +200,7 @@ export function patchActionSheets(): void {
 
             component
                 .then((instance: any) => {
+                    if (!live) return;
                     if (typeof instance?.default !== "function") return;
                     if (patchedModules.has(instance)) return;
 
@@ -216,6 +213,7 @@ export function patchActionSheets(): void {
 }
 
 export function unpatchAll(): void {
+    live = false;
     unpatchers.forEach((unpatch) => unpatch());
     unpatchers.length = 0;
     currentTargets = [];

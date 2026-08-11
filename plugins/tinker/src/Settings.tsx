@@ -1,7 +1,12 @@
-import { ReactNative } from "@vendetta/metro/common";
+// React is imported, not taken from the global: the JSX here compiles to
+// React.createElement, and a plugin bundle is eval'd with only `vendetta` in
+// scope. It happened to work off window.React, which is not something to lean on.
+import { React, ReactNative } from "@vendetta/metro/common";
 import { storage } from "@vendetta/plugin";
 import { useProxy } from "@vendetta/storage";
 import { Forms } from "@vendetta/ui/components";
+
+import { asText } from "./lib/discord";
 
 const { FormSection, FormInput, FormSwitchRow, FormDivider } = Forms;
 
@@ -46,8 +51,12 @@ export default () => {
                     value={String(storage.jsonDepth ?? 4)}
                     placeholder="4"
                     keyboardType="numeric"
-                    onChange={(v: string) => {
-                        const depth = parseInt(v, 10);
+                    onChange={(raw: unknown) => {
+                        // asText for the same reason every other field uses it:
+                        // some builds hand back { text } rather than a string,
+                        // and parseInt on that is NaN, so the field silently
+                        // snapped back to 4 on every keystroke.
+                        const depth = parseInt(asText(raw), 10);
                         // Clamped rather than trusted: these objects reference
                         // stores that reference the whole client, so a depth of
                         // 30 serialises most of the app and freezes the thread.
