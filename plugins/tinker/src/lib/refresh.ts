@@ -1,5 +1,26 @@
 import { logger } from "@vendetta";
+import { findByStoreName } from "@vendetta/metro";
 import { FluxDispatcher } from "@vendetta/metro/common";
+
+import { clearPending, pendingFor, readKey } from "./reflect";
+
+// Only used to report what a dispatch actually did. Wrapped because a store
+// name that no longer resolves must not stop the refresh itself.
+let MessageStore: any;
+try {
+    MessageStore = findByStoreName("MessageStore");
+} catch {
+    MessageStore = null;
+}
+
+/** What the store holds for a message right now, or undefined if unknowable. */
+function storedMessage(channelId: unknown, id: unknown): any {
+    try {
+        return MessageStore?.getMessage?.(channelId, id);
+    } catch {
+        return undefined;
+    }
+}
 
 export type EntityKind = "message" | "user" | "channel" | "guild" | "unknown";
 
@@ -22,6 +43,55 @@ function reidentify<T extends object>(obj: T): T {
         return Object.assign(Object.create(Object.getPrototypeOf(obj)), obj);
     } catch {
         return obj;
+    }
+}
+
+/**
+ * Dispatch with the edited records rolled back to what the store last painted.
+ *
+ * The payloads are built first, so they carry the new values; then the records
+ * themselves are put back to their pre-edit state, so a merging reducer has an
+ * actual difference to notice and emit on. The rollback lasts exactly as long
+ * as the dispatch, which is synchronous, and the `finally` restores the new
+ * values whether the reducer replaced the record or merged into it.
+ *
+ * Without this the edit is already present on both sides of the comparison and
+ * the store stays silent — the "only shows after leaving the channel" case,
+ * where the row list gets rebuilt from the mutated object anyway.
+ */
+function dispatchAsChange(objs: any[], dispatch: () => void): void {
+    const restore: Array<[any, Map<string, unknown>]> = [];
+
+    for (const obj of objs) {
+        const previous = pendingFor(obj);
+        if (!previous?.size) continue;
+
+        const current = new Map<string, unknown>();
+        for (const key of previous.keys()) {
+            const read = readKey(obj, key);
+            if (read.ok) current.set(key, read.value);
+        }
+
+        for (const [key, value] of previous) {
+            try {
+                obj[key] = value;
+            } catch {}
+        }
+
+        restore.push([obj, current]);
+    }
+
+    try {
+        dispatch();
+    } finally {
+        for (const [obj, current] of restore) {
+            for (const [key, value] of current) {
+                try {
+                    obj[key] = value;
+                } catch {}
+            }
+            clearPending(obj);
+        }
     }
 }
 
@@ -64,39 +134,87 @@ export function refresh(obj: any): { ok: boolean; detail: string } {
 
     try {
         switch (kind) {
-            case "message":
-                // The author goes out first and separately. A message row reads
-                // the BOT tag, the display name and the avatar off the author
-                // record, and that record is shared and memoized on its own —
-                // so editing message.author.bot without this dispatches nothing
-                // the chat is listening to, which is why the tag never appeared.
-                if (obj.author && typeof obj.author === "object") {
-                    FluxDispatcher.dispatch({ type: "USER_UPDATE", user: reidentify(obj.author) });
+            case "message": {
+                const author = obj.author && typeof obj.author === "object" ? obj.author : null;
+
+                // Payloads built before the rollback, so they carry the edit.
+                const message = reidentify(obj);
+                const user = author ? reidentify(author) : null;
+
+                // Both spellings, because the reducer reads one of them to find
+                // the channel whose message list to invalidate, and which one
+                // depends on the build. A record carrying only the camelCase
+                // form against a reducer reading the snake_case one is a silent
+                // no-op — the update is accepted and applied to nothing.
+                const channelId = obj.channel_id ?? obj.channelId;
+                if (channelId != null) {
+                    message.channel_id ??= channelId;
+                    message.channelId ??= channelId;
                 }
 
-                FluxDispatcher.dispatch({
-                    type: "MESSAGE_UPDATE",
-                    message: reidentify(obj),
-                    // Suppresses the "(edited)" marker the reducer would
-                    // otherwise stamp on, which is a lie about local state.
-                    log_edit: false,
-                });
-                return { ok: true, detail: "Message refreshed" };
+                const before = storedMessage(channelId, obj.id);
 
-            case "user":
+                dispatchAsChange([obj, author].filter(Boolean), () => {
+                    // The author goes out first and separately. A message row
+                    // reads the BOT tag, the display name and the avatar off the
+                    // author record, which is shared and memoized on its own, so
+                    // editing message.author.bot dispatches nothing the chat
+                    // listens to — which is why the tag never appeared.
+                    if (user) FluxDispatcher.dispatch({ type: "USER_UPDATE", user });
+
+                    FluxDispatcher.dispatch({
+                        type: "MESSAGE_UPDATE",
+                        message,
+                        // Top-level as well as on the payload: this is the shape
+                        // MESSAGE_CREATE is dispatched with in the sibling
+                        // plugin, where the chat does repaint immediately.
+                        channelId,
+                        // Suppresses the "(edited)" marker the reducer would
+                        // otherwise stamp on, which is a lie about local state.
+                        log_edit: false,
+                    });
+                });
+
+                // Says plainly whether the store took the update. "same record"
+                // means the reducer merged into what it already had and nothing
+                // downstream was told, which is the signature of an edit that
+                // only appears after leaving the channel.
+                const after = storedMessage(channelId, obj.id);
+                if (before !== undefined || after !== undefined) {
+                    logger.log(
+                        `[tinker] MESSAGE_UPDATE on ${channelId}/${obj.id}: ` +
+                            (before === after
+                                ? "store returned the same record — reducer saw no change"
+                                : "store swapped in a new record") +
+                            (after && after !== obj ? "; editor is now holding a stale copy, reopen the sheet" : "")
+                    );
+                }
+
+                return { ok: true, detail: "Message refreshed" };
+            }
+
+            case "user": {
                 // Note this is client-wide: the user record is shared, so the
                 // edit shows up everywhere that user is rendered, not just in
                 // the message you opened.
-                FluxDispatcher.dispatch({ type: "USER_UPDATE", user: reidentify(obj) });
+                const user = reidentify(obj);
+                dispatchAsChange([obj], () => FluxDispatcher.dispatch({ type: "USER_UPDATE", user }));
                 return { ok: true, detail: "User refreshed (client-wide)" };
+            }
 
-            case "channel":
-                FluxDispatcher.dispatch({ type: "CHANNEL_UPDATES", channels: [reidentify(obj)] });
+            case "channel": {
+                const channel = reidentify(obj);
+                dispatchAsChange([obj], () =>
+                    FluxDispatcher.dispatch({ type: "CHANNEL_UPDATES", channels: [channel] })
+                );
                 return { ok: true, detail: "Channel refreshed" };
+            }
 
-            case "guild":
-                FluxDispatcher.dispatch({ type: "GUILD_UPDATE", guild: reidentify(obj) });
+            case "guild": {
+                const guild = reidentify(obj);
+                dispatchAsChange([obj], () => FluxDispatcher.dispatch({ type: "GUILD_UPDATE", guild }));
                 return { ok: true, detail: "Guild refreshed" };
+            }
 
             default:
                 // Flux stores expose emitChange; plain payload objects don't.
