@@ -1,11 +1,11 @@
-import { React, ReactNative, NavigationNative, clipboard } from "@vendetta/metro/common";
+import { React, ReactNative, clipboard } from "@vendetta/metro/common";
 import { storage } from "@vendetta/plugin";
 import { useProxy } from "@vendetta/storage";
 import { showInputAlert } from "@vendetta/ui/alerts";
 import { Forms, General } from "@vendetta/ui/components";
 import { showToast } from "@vendetta/ui/toasts";
 
-import { asText, icon, leadingIcon, showMenu } from "../lib/discord";
+import { asText, icon, leadingIcon, pushPage, showMenu } from "../lib/discord";
 import {
     coerce,
     deleteKey,
@@ -90,7 +90,6 @@ function LeafInput({
 export default function ObjectEditor({ target, path }: { target: any; path: string }) {
     useProxy(storage);
 
-    const navigation = NavigationNative.useNavigation();
     const [tick, bump] = React.useReducer((n: number) => n + 1, 0);
     const [query, setQuery] = React.useState("");
     const [limit, setLimit] = React.useState(PAGE);
@@ -117,9 +116,6 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
         bump();
         if (storage.autoRefresh) refresh(target);
     };
-
-    const push = (title: string, render: () => JSX.Element) =>
-        navigation.push("VendettaCustomPage", { title, render });
 
     const rowMenu = (key: string, value: unknown) =>
         showMenu(key, [
@@ -212,7 +208,7 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
                     subLabel="Bulk-edit this object in one text field"
                     leading={leadingIcon("ic_progress_wrench_24px")}
                     trailing={FormRow.Arrow}
-                    onPress={() => push("Edit as JSON", () => <JsonEditor target={target} path={path} />)}
+                    onPress={() => pushPage("Edit as JSON", () => <JsonEditor target={target} path={path} />)}
                 />
                 <FormDivider />
                 <FormRow label="Add field" leading={leadingIcon("ic_add_24px")} onPress={addField} />
@@ -265,7 +261,7 @@ export default function ObjectEditor({ target, path }: { target: any; path: stri
                                 subLabel={preview(value)}
                                 trailing={FormRow.Arrow}
                                 onPress={() =>
-                                    push(key, () => <ObjectEditor target={value} path={`${path}.${key}`} />)
+                                    pushPage(key, () => <ObjectEditor target={value} path={`${path}.${key}`} />)
                                 }
                                 onLongPress={() => rowMenu(key, value)}
                             />
