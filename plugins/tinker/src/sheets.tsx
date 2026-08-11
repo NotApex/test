@@ -63,10 +63,20 @@ function targetsFrom(props: any): Target[] {
         if (value && typeof value === "object") out.push({ label: name, value });
     }
 
-    // Message sheets don't pass the author separately, and it's the most-edited
-    // object here, so it gets promoted to a top-level entry.
-    const author = props.message?.author;
-    if (author && typeof author === "object") out.push({ label: "message.author", value: author });
+    // Message sheets pass only the message, but the things people actually want
+    // to edit hang off it — the author most of all, and the sticker/embed/
+    // attachment arrays, which otherwise take three taps to reach and were the
+    // reason stickers looked unsupported. Promoted to top-level entries.
+    const message = props.message;
+    if (message && typeof message === "object") {
+        for (const name of ["author", "interaction", "messageReference", "stickerItems", "stickers", "embeds", "attachments"]) {
+            const value = message[name];
+            // Empty arrays are noise: every message has `embeds: []`.
+            if (!value || typeof value !== "object") continue;
+            if (Array.isArray(value) && value.length === 0) continue;
+            out.push({ label: `message.${name}`, value });
+        }
+    }
 
     out.push({ label: "sheet props", value: props });
     return out;

@@ -22,6 +22,26 @@ export function isLeaf(kind: Kind): boolean {
 }
 
 /**
+ * True for values that survive a JSON round-trip unchanged.
+ *
+ * A MessageRecord's `timestamp` is a moment object, `author` is a UserRecord,
+ * and Discord calls methods on both while painting the chat. JSON.parse gives
+ * back plain objects with the same *fields* and none of the prototype, so
+ * writing one of those over the original is what produced
+ * "undefined is not a function" inside dateFormat/createChannelStream: the
+ * renderer reached for .format() on something that no longer had it.
+ *
+ * Anything whose prototype isn't Object.prototype (or null) is therefore
+ * treated as live and never overwritten from the JSON editor.
+ */
+export function isPlainData(value: unknown): boolean {
+    if (value === null || typeof value !== "object") return true;
+    if (Array.isArray(value)) return true;
+    const proto = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+}
+
+/**
  * List the keys worth showing for an object.
  *
  * Object.keys alone is not enough here. Discord's records (MessageRecord,
