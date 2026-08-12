@@ -5,8 +5,11 @@ import { Forms } from "@vendetta/ui/components";
 import { showToast } from "@vendetta/ui/toasts";
 import { findInReactTree } from "@vendetta/utils";
 
+import { logger } from "@vendetta";
+
 import { LazyActionSheet, icon, leadingIcon, pushPage } from "./lib/discord";
 import { preview, typeLabel } from "./lib/reflect";
+import { currentChannel, currentGuild, getChannel, getGuild, getMember, getMessage, getUser } from "./lib/stores";
 import ObjectEditor from "./pages/ObjectEditor";
 
 const { FormRow, FormDivider } = Forms;
@@ -46,39 +49,79 @@ let currentTargets: Target[] = [];
 
 type Target = { label: string; value: any };
 
+/** Names a sheet might hand the object under, in the order worth offering them. */
+const DIRECT = ["message", "user", "channel", "guild", "member", "role", "emoji", "sticker", "attachment"];
+
+/** Sub-objects of a message worth promoting past the drill-in. */
+const MESSAGE_PARTS = ["author", "interaction", "messageReference", "stickerItems", "stickers", "embeds", "attachments"];
+
+/** Both spellings of every id a sheet might identify its subject by. */
+const ID_PROPS = {
+    channel: ["channelId", "channel_id"],
+    guild: ["guildId", "guild_id"],
+    user: ["userId", "user_id", "targetUserId"],
+    message: ["messageId", "message_id"],
+};
+
+const firstId = (props: any, names: string[]): unknown => {
+    for (const name of names) {
+        const value = props[name];
+        if (typeof value === "string" || typeof value === "number") return value;
+    }
+    return undefined;
+};
+
 /**
  * Pull the editable objects out of whatever the sheet was opened with.
  *
- * openLazy's third argument is the sheet's props, and the shape is per-sheet —
- * `{ message, channel }` here, `{ user }` there, nothing at all elsewhere. So
- * the well-known names are checked by hand and the whole props bag is offered
- * last, which covers every sheet this doesn't have a name for.
+ * openLazy's third argument is the sheet's props, and the shape is entirely
+ * per-sheet: `{ message, channel }` here, `{ user }` there, `{ channelId }`
+ * somewhere else, and a fair number pass nothing at all. Only the first of
+ * those was handled, so a sheet identifying its subject by id got a row with
+ * nothing useful behind it, and a sheet with no props got no row whatsoever —
+ * the channel menu among them.
+ *
+ * So: named objects first, then ids resolved through the stores, then the parts
+ * of a message worth promoting, then the raw props bag, and finally whatever is
+ * on screen. That last fallback is what guarantees an unrecognised sheet still
+ * gets an entry point, which is exactly where one is most wanted.
  */
 function targetsFrom(props: any): Target[] {
     const out: Target[] = [];
-    if (!props || typeof props !== "object") return out;
 
-    for (const name of ["message", "user", "channel", "guild", "member", "role", "emoji", "sticker", "attachment"]) {
-        const value = props[name];
-        if (value && typeof value === "object") out.push({ label: name, value });
+    const add = (label: string, value: any) => {
+        if (!value || typeof value !== "object") return;
+        if (Array.isArray(value) && value.length === 0) return; // every message has `embeds: []`
+        if (out.some((target) => target.value === value)) return; // same object under two names
+        out.push({ label, value });
+    };
+
+    if (props && typeof props === "object") {
+        for (const name of DIRECT) add(name, props[name]);
+
+        // Ids into objects. Done after the direct names so a sheet passing both
+        // the record and its id doesn't list the same object twice.
+        const channelId = firstId(props, ID_PROPS.channel);
+        const guildId = firstId(props, ID_PROPS.guild);
+        const userId = firstId(props, ID_PROPS.user);
+        const messageId = firstId(props, ID_PROPS.message);
+
+        add("message", getMessage(channelId, messageId));
+        add("channel", getChannel(channelId));
+        add("guild", getGuild(guildId));
+        add("user", getUser(userId));
+        add("member", getMember(guildId, userId));
+
+        const message = out.find((target) => target.label === "message")?.value;
+        if (message) for (const name of MESSAGE_PARTS) add(`message.${name}`, message[name]);
+
+        add("sheet props", props);
     }
 
-    // Message sheets pass only the message, but the things people actually want
-    // to edit hang off it — the author most of all, and the sticker/embed/
-    // attachment arrays, which otherwise take three taps to reach and were the
-    // reason stickers looked unsupported. Promoted to top-level entries.
-    const message = props.message;
-    if (message && typeof message === "object") {
-        for (const name of ["author", "interaction", "messageReference", "stickerItems", "stickers", "embeds", "attachments"]) {
-            const value = message[name];
-            // Empty arrays are noise: every message has `embeds: []`.
-            if (!value || typeof value !== "object") continue;
-            if (Array.isArray(value) && value.length === 0) continue;
-            out.push({ label: `message.${name}`, value });
-        }
-    }
+    // Always something to open, even for a sheet that says nothing about itself.
+    add("current channel", currentChannel());
+    add("current guild", currentGuild());
 
-    out.push({ label: "sheet props", value: props });
     return out;
 }
 
@@ -205,6 +248,14 @@ export function patchActionSheets(): void {
         before("openLazy", LazyActionSheet, ([component, key, props]: [any, string, any]) => {
             currentTargets =
                 !storage.allSheets && !KNOWN_SHEETS.includes(key) ? [] : targetsFrom(props);
+
+            // The prop names are the whole story when a sheet comes up without
+            // the row, or with less on it than expected: they say what the sheet
+            // was opened with and therefore what there was to work from.
+            logger.log(
+                `[tinker] sheet ${key}: props {${props && typeof props === "object" ? Object.keys(props).join(", ") : typeof props}} ` +
+                    `-> ${currentTargets.length ? currentTargets.map((t) => t.label).join(", ") : "no targets"}`
+            );
 
             if (typeof component?.then !== "function") return;
 
