@@ -15,8 +15,11 @@ const { FormRow } = Forms;
  * from it yields undefined and blows up at the call site. Vendetta's own
  * Developer page pulls it the way it is pulled here.
  */
-const ActionSheetModule = findByProps("showSimpleActionSheet");
+export const ActionSheetModule = findByProps("showSimpleActionSheet");
 export const LazyActionSheet = findByProps("openLazy", "hideActionSheet");
+
+/** Key used by this plugin's own menus, so patches can tell them apart from Discord's. */
+export const OWN_MENU_KEY = "TinkerRowMenu";
 
 export interface SheetOption {
     label: string;
@@ -26,7 +29,7 @@ export interface SheetOption {
 
 export function showMenu(title: string, options: SheetOption[]): void {
     ActionSheetModule?.showSimpleActionSheet?.({
-        key: "TinkerRowMenu",
+        key: OWN_MENU_KEY,
         header: {
             title,
             onClose: () => LazyActionSheet?.hideActionSheet?.(),
