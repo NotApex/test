@@ -70,6 +70,11 @@ export function currentChannel(): any {
     return getChannel(id);
 }
 
+/** The logged-in account's own user record. */
+export function currentUser(): any {
+    return call(UserStore?.getCurrentUser);
+}
+
 /** The server currently on screen. Undefined in DMs, which is correct rather than a failure. */
 export function currentGuild(): any {
     let id: unknown;

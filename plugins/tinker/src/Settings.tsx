@@ -5,16 +5,62 @@ import { React, ReactNative } from "@vendetta/metro/common";
 import { storage } from "@vendetta/plugin";
 import { useProxy } from "@vendetta/storage";
 import { Forms } from "@vendetta/ui/components";
+import { showToast } from "@vendetta/ui/toasts";
 
-import { asText } from "./lib/discord";
+import { asText, icon, leadingIcon } from "./lib/discord";
+import { currentChannel, currentGuild, currentUser } from "./lib/stores";
+import { openTarget } from "./pages/TargetPicker";
 
-const { FormSection, FormInput, FormSwitchRow, FormDivider } = Forms;
+const { FormSection, FormRow, FormInput, FormSwitchRow, FormDivider } = Forms;
+
+/**
+ * Somewhere to start that does not depend on a menu existing.
+ *
+ * Not every surface is a menu this plugin can reach: a settings screen has no
+ * action sheet to append to, and some context menus come from components that
+ * never call into the sheet modules at all. These rows work from wherever the
+ * client currently is, so there is always a way in.
+ */
+function OpenRow({ label, subLabel, resolve }: { label: string; subLabel: string; resolve: () => any }) {
+    return (
+        <FormRow
+            label={label}
+            subLabel={subLabel}
+            leading={leadingIcon("ic_progress_wrench_24px", "ic_more_24px")}
+            trailing={FormRow.Arrow}
+            onPress={() => {
+                const value = resolve();
+                if (!value) {
+                    showToast(`Nothing to open for "${label}" right now`, icon("ic_warning_24px"));
+                    return;
+                }
+                openTarget({ label, value });
+            }}
+        />
+    );
+}
 
 export default () => {
     useProxy(storage);
 
     return (
         <ReactNative.ScrollView style={{ flex: 1 }}>
+            <FormSection title="Open now">
+                <OpenRow
+                    label="current channel"
+                    subLabel="The channel last on screen, editable from anywhere"
+                    resolve={currentChannel}
+                />
+                <FormDivider />
+                <OpenRow
+                    label="current server"
+                    subLabel="The server last on screen — use this for server settings"
+                    resolve={currentGuild}
+                />
+                <FormDivider />
+                <OpenRow label="me" subLabel="Your own user record" resolve={currentUser} />
+            </FormSection>
+
             <FormSection title="What to show">
                 <FormSwitchRow
                     label="Include derived properties"

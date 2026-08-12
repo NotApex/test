@@ -7,12 +7,14 @@ import { findInReactTree } from "@vendetta/utils";
 
 import { logger } from "@vendetta";
 
-import { LazyActionSheet, icon, leadingIcon, pushPage } from "./lib/discord";
-import { preview, typeLabel } from "./lib/reflect";
+import { ActionSheetModule, LazyActionSheet, OWN_MENU_KEY, icon, leadingIcon } from "./lib/discord";
 import { currentChannel, currentGuild, getChannel, getGuild, getMember, getMessage, getUser } from "./lib/stores";
-import ObjectEditor from "./pages/ObjectEditor";
+import { Target, openTargets } from "./pages/TargetPicker";
 
 const { FormRow, FormDivider } = Forms;
+
+/** Marks options this plugin appended, so they are added once and never recursed into. */
+const MARK = "__tinker";
 
 /** Sheets touched when "every menu" is off. */
 const KNOWN_SHEETS = [
@@ -46,8 +48,6 @@ const patchedModules = new WeakSet<object>();
  * before the sheet renders, so this is current by the time the row is built.
  */
 let currentTargets: Target[] = [];
-
-type Target = { label: string; value: any };
 
 /** Names a sheet might hand the object under, in the order worth offering them. */
 const DIRECT = ["message", "user", "channel", "guild", "member", "role", "emoji", "sticker", "attachment"];
@@ -125,43 +125,11 @@ function targetsFrom(props: any): Target[] {
     return out;
 }
 
-const openTarget = (target: Target) =>
-    pushPage(target.label, () => <ObjectEditor target={target.value} path={target.label} />);
-
-function TargetPicker({ targets }: { targets: Target[] }) {
-    return (
-        <>
-            {targets.map((target, index) => (
-                <React.Fragment key={target.label}>
-                    {index > 0 && <FormDivider />}
-                    <FormRow
-                        label={target.label}
-                        subLabel={`${typeLabel(target.value)} · ${preview(target.value)}`}
-                        trailing={FormRow.Arrow}
-                        onPress={() => openTarget(target)}
-                    />
-                </React.Fragment>
-            ))}
-        </>
-    );
-}
-
 /** The row appended to the sheet. */
 function InspectRow({ targets }: { targets: Target[] }) {
     const open = () => {
-        try {
-            LazyActionSheet?.hideActionSheet?.();
-
-            // One candidate isn't a choice — skip the picker.
-            if (targets.length === 1) {
-                openTarget(targets[0]);
-                return;
-            }
-
-            pushPage("Inspect & edit", () => <TargetPicker targets={targets} />);
-        } catch (err: any) {
-            showToast(`Couldn't open editor: ${err?.message ?? err}`, icon("ic_warning_24px"));
-        }
+        LazyActionSheet?.hideActionSheet?.();
+        openTargets(targets);
     };
 
     return (
@@ -176,6 +144,30 @@ function InspectRow({ targets }: { targets: Target[] }) {
             />
         </>
     );
+}
+
+/**
+ * Does this element look like one of the sheet's own options?
+ *
+ * Matching on the component name alone was the mistake. Discord's bundle is
+ * minified, so most of these types are called `t` or `e` — only the handful
+ * that keep a displayName ever matched, which is why plenty of sheets were
+ * patched successfully and still came up without a row: the container was never
+ * recognised and the entry went to the fragment fallback, where it renders
+ * outside the sheet's own layout and is easy to miss entirely.
+ *
+ * Shape survives minification where names don't: anything carrying an onPress
+ * or a label is a row as far as this needs to care.
+ */
+function looksLikeRow(child: any): boolean {
+    if (!child || typeof child !== "object") return false;
+
+    const name = child.type?.name ?? child.type?.displayName;
+    if (typeof name === "string" && /Row|Button|Item|Option|Entry/.test(name)) return true;
+
+    const props = child.props;
+    if (!props || typeof props !== "object") return false;
+    return typeof props.onPress === "function" || typeof props.label === "string";
 }
 
 /**
@@ -200,10 +192,7 @@ function inject(tree: any): any {
 
         const container = findInReactTree(tree, (node: any) => {
             if (!Array.isArray(node?.props?.children)) return false;
-            return node.props.children.some((child: any) => {
-                const name = child?.type?.name ?? child?.type?.displayName;
-                return typeof name === "string" && /Row|Button|Item/.test(name);
-            });
+            return node.props.children.some(looksLikeRow);
         });
 
         if (container) {
@@ -236,6 +225,45 @@ function inject(tree: any): any {
  */
 let live = false;
 
+/**
+ * Add an option to Discord's simple action sheets.
+ *
+ * A different mechanism from openLazy, and the one behind several of the
+ * context menus that come off the sidebar, so patching only openLazy left those
+ * menus untouched no matter what the target list said. showSimpleActionSheet
+ * carries no subject — just a key, a header and a list of options — so the
+ * entry works from whatever the sheet-independent lookup can see, which is the
+ * channel and server currently on screen.
+ */
+function patchSimpleSheets(): void {
+    if (typeof ActionSheetModule?.showSimpleActionSheet !== "function") return;
+
+    unpatchers.push(
+        before("showSimpleActionSheet", ActionSheetModule, ([config]: [any]) => {
+            // Never the plugin's own menus: appending to those would put an
+            // "Inspect & edit" inside the menu that opens from a row of the
+            // editor, and then inside that one, forever.
+            if (!config || config.key === OWN_MENU_KEY) return;
+            if (!Array.isArray(config.options)) return;
+            if (config.options.some((option: any) => option?.[MARK])) return;
+
+            const targets = currentTargets.length ? currentTargets : targetsFrom(config.context ?? config.props);
+            if (!targets.length) return;
+
+            logger.log(`[tinker] simple sheet ${config.key}: -> ${targets.map((t) => t.label).join(", ")}`);
+
+            config.options.push({
+                [MARK]: true,
+                label: "Inspect & edit",
+                onPress: () => {
+                    LazyActionSheet?.hideActionSheet?.();
+                    openTargets(targets);
+                },
+            });
+        })
+    );
+}
+
 export function patchActionSheets(): void {
     if (!LazyActionSheet?.openLazy) {
         showToast("tinker: action sheet module not found", icon("ic_warning_24px"));
@@ -243,6 +271,7 @@ export function patchActionSheets(): void {
     }
 
     live = true;
+    patchSimpleSheets();
 
     unpatchers.push(
         before("openLazy", LazyActionSheet, ([component, key, props]: [any, string, any]) => {
